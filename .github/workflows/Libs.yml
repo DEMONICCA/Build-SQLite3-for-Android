@@ -1,0 +1,106 @@
+name: Build SQLite3 shared libs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        abi: [armeabi-v7a, arm64-v8a, x86, x86_64]
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          wget curl tar clang llvm
+
+    - name: Detect latest SQLite version
+      id: detect
+      run: |
+        RAW=$(curl -s https://sqlite.org/download.html | grep -oE '[0-9]{4}/sqlite-autoconf-[0-9]{7}\.tar\.gz' | head -n1)
+        [ -z "$RAW" ] && echo "❌ Failed to detect version." && exit 1
+        YEAR=$(echo "$RAW" | cut -d/ -f1)
+        VERSION_RAW=$(echo "$RAW" | grep -oE '[0-9]{7}')
+        VERSION_URL="https://sqlite.org/$YEAR/sqlite-autoconf-$VERSION_RAW.tar.gz"
+        echo "VERSION_URL=$VERSION_URL" >> $GITHUB_ENV
+        echo "VERSION_RAW=$VERSION_RAW" >> $GITHUB_ENV
+        echo "✅ Detected SQLite version: $VERSION_RAW"
+
+    - name: Download & Extract SQLite
+      run: |
+        mkdir -p src
+        cd src
+        wget ${{ env.VERSION_URL }} -O sqlite.tar.gz
+        tar xf sqlite.tar.gz
+        mv sqlite-autoconf-${{ env.VERSION_RAW }} sqlite-src
+
+    - name: Prepare output
+      run: mkdir -p output
+
+    - name: Install Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r26d
+
+    - name: Build libsqlite3.so
+      env:
+        ABI: ${{ matrix.abi }}
+      run: |
+        echo "🔧 Building for $ABI"
+
+        case $ABI in
+          armeabi-v7a)
+            TARGET=armv7a-linux-androideabi
+            API=21
+            ;;
+          arm64-v8a)
+            TARGET=aarch64-linux-android
+            API=21
+            ;;
+          x86)
+            TARGET=i686-linux-android
+            API=21
+            ;;
+          x86_64)
+            TARGET=x86_64-linux-android
+            API=21
+            ;;
+          *)
+            echo "❌ Unsupported ABI: $ABI" && exit 1
+            ;;
+        esac
+
+        CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}${API}-clang
+
+        $CC -shared -fPIC \
+          src/sqlite-src/sqlite3.c \
+          -I src/sqlite-src \
+          -o output/libsqlite3-${ABI}.so \
+          -Os \
+          -Wl,--strip-all \
+          -lm -ldl \
+          -DSQLITE_ENABLE_FTS3 \
+          -DSQLITE_ENABLE_FTS4 \
+          -DSQLITE_ENABLE_FTS5 \
+          -DSQLITE_ENABLE_RTREE \
+          -DSQLITE_ENABLE_JSON1 \
+          -DSQLITE_ENABLE_GEOPOLY \
+          -DSQLITE_THREADSAFE=1 \
+          -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+          -DSQLITE_API=__attribute__\(\(visibility\(\"default\"\)\)\)
+
+        echo "✅ Built: output/libsqlite3-${ABI}.so"
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libsqlite3-libs
+        path: output/
+        
