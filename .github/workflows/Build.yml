@@ -1,0 +1,100 @@
+name: Build SQLite3 for Android
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        api: [21]
+        ndk_version: [r26d]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y curl tar make clang
+
+      - name: Download Android NDK
+        run: |
+          curl -o android-ndk.zip https://dl.google.com/android/repository/android-ndk-${{ matrix.ndk_version }}-linux.zip
+          unzip android-ndk.zip
+          mv android-ndk-* ndk
+
+      - name: Get Latest SQLite Autoconf Tarball
+        id: get_version
+        run: |
+          set -e
+          RAW=$(curl -s https://sqlite.org/download.html | grep -oE '[0-9]{4}/sqlite-autoconf-[0-9]{7}\.tar\.gz' | head -n1)
+          VERSION=$(echo "$RAW" | grep -oE '[0-9]{7}')
+          URL="https://sqlite.org/${RAW}"
+          echo "RAW_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "TARBALL_URL=$URL" >> $GITHUB_ENV
+          echo "Found SQLite version: $VERSION"
+
+      - name: Download & Extract SQLite
+        run: |
+          mkdir src
+          cd src
+          curl -LO ${{ env.TARBALL_URL }}
+          tar xf sqlite-autoconf-${{ env.RAW_VERSION }}.tar.gz
+          mv sqlite-autoconf-${{ env.RAW_VERSION }} sqlite-src
+
+      - name: Build for all architectures
+        run: |
+          API=${{ matrix.api }}
+          NDK=$GITHUB_WORKSPACE/ndk
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+          cd src/sqlite-src
+
+          mkdir -p $GITHUB_WORKSPACE/out
+
+          for ARCH in armv7a aarch64 x86 x86_64; do
+            echo "=============================="
+            echo "Building for $ARCH"
+            echo "=============================="
+            rm -rf build
+            mkdir build
+            cd build
+
+            case $ARCH in
+              armv7a)
+                TARGET=armv7a-linux-androideabi
+                CC=$TOOLCHAIN/${TARGET}${API}-clang
+                ;;
+              aarch64)
+                TARGET=aarch64-linux-android
+                CC=$TOOLCHAIN/${TARGET}${API}-clang
+                ;;
+              x86)
+                TARGET=i686-linux-android
+                CC=$TOOLCHAIN/${TARGET}${API}-clang
+                ;;
+              x86_64)
+                TARGET=x86_64-linux-android
+                CC=$TOOLCHAIN/${TARGET}${API}-clang
+                ;;
+            esac
+
+            echo "Using CC=$CC"
+            CC=$CC ../configure --host=$TARGET --disable-shared --enable-static
+            make -j$(nproc)
+            mkdir -p $GITHUB_WORKSPACE/out/$ARCH
+            cp sqlite3 $GITHUB_WORKSPACE/out/$ARCH/
+
+            cd ..
+            rm -rf build
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite3-binaries
+          path: out/**
