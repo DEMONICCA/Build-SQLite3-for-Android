@@ -1,4 +1,4 @@
-name: Build Full-featured SQLite3 Shared Libs
+name: Build SQLite3 Shared Libs
 
 on:
   workflow_dispatch:
