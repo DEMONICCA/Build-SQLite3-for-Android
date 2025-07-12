@@ -1,0 +1,107 @@
+name: Build SQLite3 Shared Libs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        abi: [armeabi-v7a, arm64-v8a, x86, x86_64]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          clang \
+          llvm \
+          curl \
+          wget \
+          unzip \
+          build-essential
+
+    - name: Download NDK (r25c)
+      run: |
+        curl -LO https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+        unzip android-ndk-r25c-linux.zip
+        echo "NDK_DIR=$(pwd)/android-ndk-r25c" >> $GITHUB_ENV
+
+    - name: Detect latest SQLite
+      id: detect
+      run: |
+        RAW=$(curl -s https://sqlite.org/download.html | grep -oE '[0-9]{4}/sqlite-autoconf-[0-9]{7}\.tar\.gz' | head -n1)
+        YEAR=$(echo "$RAW" | cut -d/ -f1)
+        VERSION_RAW=$(echo "$RAW" | grep -oE '[0-9]{7}')
+        VERSION_URL="https://sqlite.org/$YEAR/sqlite-autoconf-$VERSION_RAW.tar.gz"
+        echo "VERSION_RAW=$VERSION_RAW" >> $GITHUB_ENV
+        echo "VERSION_URL=$VERSION_URL" >> $GITHUB_ENV
+
+    - name: Download SQLite Source
+      run: |
+        mkdir -p src
+        cd src
+        wget ${{ env.VERSION_URL }} -O sqlite.tar.gz
+        tar xf sqlite.tar.gz
+        mv sqlite-autoconf-${{ env.VERSION_RAW }} sqlite-src
+
+    - name: Build libsqlite3.so for ${{ matrix.abi }}
+      run: |
+        ABI=${{ matrix.abi }}
+        case $ABI in
+          armeabi-v7a)
+            TARGET=armv7a-linux-androideabi
+            API=21
+            ;;
+          arm64-v8a)
+            TARGET=aarch64-linux-android
+            API=21
+            ;;
+          x86)
+            TARGET=i686-linux-android
+            API=21
+            ;;
+          x86_64)
+            TARGET=x86_64-linux-android
+            API=21
+            ;;
+        esac
+
+        export TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
+        export CC=$TOOLCHAIN/bin/$TARGET$API-clang
+
+        mkdir -p output
+        $CC -shared -fPIC \
+  src/sqlite-src/sqlite3.c \
+  src/sqlite-src/shell.c \
+  -I src/sqlite-src \
+  -o output/libsqlite3-$ABI.so \
+  -Os \
+  -Wl,--strip-all \
+  -lm -ldl \
+  -DSQLITE_ENABLE_FTS3 \
+  -DSQLITE_ENABLE_FTS4 \
+  -DSQLITE_ENABLE_FTS5 \
+  -DSQLITE_ENABLE_RTREE \
+  -DSQLITE_ENABLE_JSON1 \
+  -DSQLITE_ENABLE_GEOPOLY \
+  -DSQLITE_THREADSAFE=1 \
+  -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+  -DSQLITE_ENABLE_COLUMN_METADATA \
+  -DSQLITE_ENABLE_DBSTAT_VTAB \
+  -DSQLITE_ENABLE_UPDATE_DELETE_LIMIT \
+  -DSQLITE_ENABLE_LOAD_EXTENSION \
+  -DSQLITE_USE_URI=1 \
+  -DHAVE_READLINE=0 \
+  -DSQLITE_API='__attribute__((visibility("default")))'
+  
+    - name: Upload Artifact ${{ matrix.abi }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: libsqlite3-${{ matrix.abi }}
+        path: output/libsqlite3-${{ matrix.abi }}.so
+        if-no-files-found: error
