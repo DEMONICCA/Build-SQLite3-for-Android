@@ -1,15 +1,14 @@
-name: Build SQLite3 shared libs
+name: Build Full-featured SQLite3 Shared Libs
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
     strategy:
       matrix:
         abi: [armeabi-v7a, arm64-v8a, x86, x86_64]
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout
@@ -18,21 +17,31 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget curl tar clang llvm
+        sudo apt-get install -y \
+          clang \
+          llvm \
+          curl \
+          wget \
+          unzip \
+          build-essential
 
-    - name: Detect latest SQLite version
+    - name: Download NDK (r25c)
+      run: |
+        curl -LO https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+        unzip android-ndk-r25c-linux.zip
+        echo "NDK_DIR=$(pwd)/android-ndk-r25c" >> $GITHUB_ENV
+
+    - name: Detect latest SQLite
       id: detect
       run: |
         RAW=$(curl -s https://sqlite.org/download.html | grep -oE '[0-9]{4}/sqlite-autoconf-[0-9]{7}\.tar\.gz' | head -n1)
-        [ -z "$RAW" ] && echo "❌ Failed to detect version." && exit 1
         YEAR=$(echo "$RAW" | cut -d/ -f1)
         VERSION_RAW=$(echo "$RAW" | grep -oE '[0-9]{7}')
         VERSION_URL="https://sqlite.org/$YEAR/sqlite-autoconf-$VERSION_RAW.tar.gz"
-        echo "VERSION_URL=$VERSION_URL" >> $GITHUB_ENV
         echo "VERSION_RAW=$VERSION_RAW" >> $GITHUB_ENV
-        echo "✅ Detected SQLite version: $VERSION_RAW"
+        echo "VERSION_URL=$VERSION_URL" >> $GITHUB_ENV
 
-    - name: Download & Extract SQLite
+    - name: Download SQLite Source
       run: |
         mkdir -p src
         cd src
@@ -40,19 +49,9 @@ jobs:
         tar xf sqlite.tar.gz
         mv sqlite-autoconf-${{ env.VERSION_RAW }} sqlite-src
 
-    - name: Install Android NDK
-      uses: nttld/setup-ndk@v1
-      with:
-        ndk-version: r26d
-
-    - name: Build libsqlite3.so
-      env:
-        ABI: ${{ matrix.abi }}
+    - name: Build libsqlite3.so for ${{ matrix.abi }}
       run: |
-        mkdir -p output
-
-        echo "🔧 Building for $ABI"
-
+        ABI=${{ matrix.abi }}
         case $ABI in
           armeabi-v7a)
             TARGET=armv7a-linux-androideabi
@@ -70,17 +69,17 @@ jobs:
             TARGET=x86_64-linux-android
             API=21
             ;;
-          *)
-            echo "❌ Unsupported ABI: $ABI" && exit 1
-            ;;
         esac
 
-        CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}${API}-clang
+        export TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
+        export CC=$TOOLCHAIN/bin/$TARGET$API-clang
 
+        mkdir -p output
         $CC -shared -fPIC \
           src/sqlite-src/sqlite3.c \
+          src/sqlite-src/shell.c \
           -I src/sqlite-src \
-          -o output/libsqlite3-${ABI}.so \
+          -o output/libsqlite3-$ABI.so \
           -Os \
           -Wl,--strip-all \
           -lm -ldl \
@@ -92,12 +91,17 @@ jobs:
           -DSQLITE_ENABLE_GEOPOLY \
           -DSQLITE_THREADSAFE=1 \
           -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
-          -DSQLITE_API=__attribute__\(\(visibility\(\"default\"\)\)\)
+          -DSQLITE_ENABLE_COLUMN_METADATA \
+          -DSQLITE_ENABLE_DBSTAT_VTAB \
+          -DSQLITE_ENABLE_UPDATE_DELETE_LIMIT \
+          -DSQLITE_ENABLE_LOAD_EXTENSION \
+          -DSQLITE_USE_URI=1 \
+          -DHAVE_READLINE=0 \
+          -DSQLITE_API=__attribute__\(\(visibility\("default"\)\)\)
 
-        echo "✅ Built: output/libsqlite3-${ABI}.so"
-
-    - name: Upload Artifact
+    - name: Upload Artifact ${{ matrix.abi }}
       uses: actions/upload-artifact@v4
       with:
         name: libsqlite3-${{ matrix.abi }}
-        path: output/
+        path: output/libsqlite3-${{ matrix.abi }}.so
+        if-no-files-found: error
