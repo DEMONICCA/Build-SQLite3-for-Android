@@ -18,8 +18,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          wget curl tar clang llvm
+        sudo apt-get install -y wget curl tar clang llvm
 
     - name: Detect latest SQLite version
       id: detect
@@ -41,9 +40,6 @@ jobs:
         tar xf sqlite.tar.gz
         mv sqlite-autoconf-${{ env.VERSION_RAW }} sqlite-src
 
-    - name: Prepare output
-      run: mkdir -p output
-
     - name: Install Android NDK
       uses: nttld/setup-ndk@v1
       with:
@@ -53,6 +49,8 @@ jobs:
       env:
         ABI: ${{ matrix.abi }}
       run: |
+        mkdir -p output
+
         echo "🔧 Building for $ABI"
 
         case $ABI in
@@ -98,9 +96,8 @@ jobs:
 
         echo "✅ Built: output/libsqlite3-${ABI}.so"
 
-    - name: Upload artifacts
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: libsqlite3-libs
+        name: libsqlite3-${{ matrix.abi }}
         path: output/
-        
