@@ -1,0 +1,88 @@
+name: Build ALL libsqlite3.so (Android ABIs)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget curl build-essential clang
+
+    - name: Detect Latest SQLite Version
+      id: detect
+      run: |
+        RAW=$(curl -s https://sqlite.org/download.html | grep -oE '[0-9]{4}/sqlite-autoconf-[0-9]{7}\.tar\.gz' | head -n1)
+        YEAR=$(echo "$RAW" | cut -d/ -f1)
+        VERSION=$(echo "$RAW" | grep -oE '[0-9]{7}')
+        echo "URL=https://sqlite.org/$YEAR/sqlite-autoconf-$VERSION.tar.gz" >> $GITHUB_ENV
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "✅ Latest SQLite version: $VERSION"
+
+    - name: Download & Extract SQLite
+      run: |
+        mkdir -p src
+        cd src
+        wget -q ${{ env.URL }} -O sqlite.tar.gz
+        tar xf sqlite.tar.gz
+        mv sqlite-autoconf-${{ env.VERSION }} sqlite-src
+
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r25c
+
+    - name: Build ALL libsqlite3.so
+      run: |
+        mkdir -p output
+
+        declare -A TARGETS
+        TARGETS["armeabi-v7a"]="armv7a-linux-androideabi"
+        TARGETS["arm64-v8a"]="aarch64-linux-android"
+        TARGETS["x86"]="i686-linux-android"
+        TARGETS["x86_64"]="x86_64-linux-android"
+
+        API=21
+
+        for ABI in "${!TARGETS[@]}"; do
+          echo "🔧 Building for $ABI"
+
+          TARGET=${TARGETS[$ABI]}
+          CC=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}${API}-clang
+
+          $CC -shared -fPIC \
+            src/sqlite-src/sqlite3.c \
+            -I src/sqlite-src \
+            -o output/libsqlite3-$ABI.so \
+            -Os \
+            -Wl,--strip-all \
+            -lm -ldl \
+            -DSQLITE_ENABLE_FTS3 \
+            -DSQLITE_ENABLE_FTS4 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_GEOPOLY \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_ENABLE_DBSTAT_VTAB \
+            -DSQLITE_ENABLE_UPDATE_DELETE_LIMIT \
+            -DSQLITE_ENABLE_LOAD_EXTENSION \
+            -DSQLITE_USE_URI=1 \
+            -DHAVE_READLINE=0 \
+            -DSQLITE_API='__attribute__((visibility("default")))'
+        done
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libsqlite3-all
+        path: output/
